@@ -34,6 +34,14 @@ impl AppError {
         Self::new(StatusCode::BAD_REQUEST, codes::INVALID_INPUT, message)
     }
 
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, codes::RATE_LIMITED, message)
+    }
+
+    pub fn too_many_streams() -> Self {
+        Self::rate_limited("This device has too many open streams. Close one first.")
+    }
+
     pub fn stale_epoch(room_epoch: u64) -> Self {
         Self::new(
             StatusCode::CONFLICT,

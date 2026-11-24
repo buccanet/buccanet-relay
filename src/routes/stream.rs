@@ -12,7 +12,7 @@ use buccanet_protocol::api::InboxPage;
 use futures::Stream;
 
 use crate::auth::AuthDevice;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 const HEARTBEAT: Duration = Duration::from_secs(25);
@@ -34,10 +34,12 @@ async fn stream(
     State(state): State<AppState>,
     AuthDevice(device): AuthDevice,
     headers: HeaderMap,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
+    let slot = state.hub.open_stream(&device.id).ok_or_else(AppError::too_many_streams)?;
     let mut cursor = last_event_id(&headers);
     let notify = state.hub.handle(&device.id);
     let events = async_stream::stream! {
+        let _slot = slot;
         loop {
             let woken = notify.notified();
             tokio::pin!(woken);
@@ -51,5 +53,5 @@ async fn stream(
             let _ = tokio::time::timeout(HEARTBEAT, woken).await;
         }
     };
-    Sse::new(events).keep_alive(KeepAlive::new().interval(HEARTBEAT))
+    Ok(Sse::new(events).keep_alive(KeepAlive::new().interval(HEARTBEAT)))
 }

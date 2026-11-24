@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use axum::http::HeaderName;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: SocketAddr,
@@ -11,6 +13,8 @@ pub struct Config {
     pub message_ttl_days: u64,
     /// Built web app served at `/` when set, so one origin hosts relay and web client.
     pub static_dir: Option<PathBuf>,
+    /// Header holding the client address, set by the reverse proxy in front of the relay.
+    pub client_ip_header: Option<HeaderName>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +46,10 @@ impl Config {
             public_origin: required("PUBLIC_ORIGIN")?,
             message_ttl_days: parsed("MESSAGE_TTL_DAYS")?,
             static_dir: std::env::var("STATIC_DIR").ok().map(PathBuf::from),
+            client_ip_header: match std::env::var("CLIENT_IP_HEADER") {
+                Ok(name) => Some(HeaderName::try_from(name.as_str()).map_err(|_| ConfigError::Invalid("CLIENT_IP_HEADER", name))?),
+                Err(_) => None,
+            },
         })
     }
 }

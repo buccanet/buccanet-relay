@@ -1,8 +1,6 @@
 use axum::extract::FromRequestParts;
-use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
-use buccanet_protocol::api::codes;
 
 use crate::error::AppError;
 use crate::features::devices::repo::DeviceDoc;
@@ -23,8 +21,8 @@ impl FromRequestParts<AppState> for AuthDevice {
             .and_then(|value| value.strip_prefix("Bearer "))
             .ok_or_else(AppError::unauthorized)?;
         let device = state.devices.by_token_hash(&hash_token(token)).await?.ok_or_else(AppError::unauthorized)?;
-        if !state.device_limiter.allow(&device.id) {
-            return Err(AppError::new(StatusCode::TOO_MANY_REQUESTS, codes::RATE_LIMITED, "Slow down a little."));
+        if !state.limits.device.allow(&device.id) {
+            return Err(AppError::rate_limited("Slow down a little."));
         }
         Ok(AuthDevice(device))
     }

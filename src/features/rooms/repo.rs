@@ -1,9 +1,16 @@
 use buccanet_protocol::api::RoomPolicy;
 use futures::TryStreamExt;
 use mongodb::bson::{DateTime, doc, to_bson};
+use std::time::Duration;
+
 use mongodb::options::IndexOptions;
 use mongodb::{Collection, Database, IndexModel};
 use serde::{Deserialize, Serialize};
+
+/// Join requests, decided or not, are deleted after this long.
+const REQUEST_TTL: Duration = Duration::from_secs(30 * 86_400);
+/// An expired invite still answers "expired" for this long, then is deleted.
+const EXPIRED_INVITE_KEPT: Duration = Duration::from_secs(7 * 86_400);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberDoc {
@@ -150,9 +157,15 @@ impl RoomsRepo {
         self.requests.find(doc! { "room_id": room_id, "status": "pending" }).sort(doc! { "created_at": 1 }).await?.try_collect().await
     }
 
-    pub async fn set_request_status(&self, id: &str, status: RequestStatus) -> mongodb::error::Result<()> {
+    pub async fn count_pending(&self, room_id: &str) -> mongodb::error::Result<u64> {
+        self.requests.count_documents(doc! { "room_id": room_id, "status": "pending" }).await
+    }
+
+    /// Decides a request that is still pending; false when it was decided already.
+    pub async fn decide_request(&self, id: &str, status: RequestStatus) -> mongodb::error::Result<bool> {
         let status = to_bson(&status).expect("status always serializes");
-        self.requests.update_one(doc! { "_id": id }, doc! { "$set": { "status": status } }).await.map(|_| ())
+        let result = self.requests.update_one(doc! { "_id": id, "status": "pending" }, doc! { "$set": { "status": status } }).await?;
+        Ok(result.modified_count == 1)
     }
 
     pub async fn ensure_indexes(&self) -> mongodb::error::Result<()> {
@@ -161,6 +174,13 @@ impl RoomsRepo {
         self.rooms.create_index(IndexModel::builder().keys(doc! { "members.device_id": 1 }).build()).await?;
         self.invites.create_index(IndexModel::builder().keys(doc! { "token_hash": 1 }).options(unique()).build()).await?;
         self.requests.create_index(IndexModel::builder().keys(doc! { "room_id": 1, "status": 1 }).build()).await?;
+        let one_pending = IndexOptions::builder().unique(true).partial_filter_expression(doc! { "status": "pending" }).build();
+        let pending_key = doc! { "room_id": 1, "device_id": 1 };
+        self.requests.create_index(IndexModel::builder().keys(pending_key).options(one_pending).build()).await?;
+        let requests_ttl = IndexOptions::builder().expire_after(REQUEST_TTL).build();
+        self.requests.create_index(IndexModel::builder().keys(doc! { "created_at": 1 }).options(requests_ttl).build()).await?;
+        let invites_ttl = IndexOptions::builder().expire_after(EXPIRED_INVITE_KEPT).build();
+        self.invites.create_index(IndexModel::builder().keys(doc! { "expires_at": 1 }).options(invites_ttl).build()).await?;
         Ok(())
     }
 }

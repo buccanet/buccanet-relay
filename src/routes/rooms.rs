@@ -3,13 +3,14 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use buccanet_protocol::api::{
-    Accepted, Approve, CreateRoom, InviteCreated, InvitePreview, JoinRequested, PendingRequest, PostMessage, RemoveMember,
-    RequestJoin, RoomView,
+    Accepted, Approve, CreateRoom, InviteCreated, InvitePreview, JoinRequested, PendingRequest, PostMessage, RemoveMember, RequestJoin,
+    RoomView,
 };
 
 use super::ApiJson;
 use crate::auth::AuthDevice;
-use crate::error::AppResult;
+use crate::client_addr::ClientAddr;
+use crate::error::{AppError, AppResult};
 use crate::features::rooms::{joins, posting, service};
 use crate::state::AppState;
 
@@ -106,7 +107,14 @@ async fn remove(
     Ok(Json(joins::remove(&state, &room_id, &target, &device, input).await?))
 }
 
-async fn preview(State(state): State<AppState>, Path(token): Path<String>) -> AppResult<Json<InvitePreview>> {
+async fn preview(
+    State(state): State<AppState>,
+    ClientAddr(client): ClientAddr,
+    Path(token): Path<String>,
+) -> AppResult<Json<InvitePreview>> {
+    if !state.limits.preview.allow(&client) {
+        return Err(AppError::rate_limited("Too many invite lookups from this address."));
+    }
     Ok(Json(service::preview(&state, &token).await?))
 }
 

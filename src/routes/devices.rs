@@ -1,6 +1,4 @@
-use std::net::SocketAddr;
-
-use axum::extract::{ConnectInfo, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -9,6 +7,7 @@ use mongodb::bson::DateTime;
 
 use super::ApiJson;
 use crate::auth::AuthDevice;
+use crate::client_addr::ClientAddr;
 use crate::error::{AppError, AppResult};
 use crate::features::devices::repo::DeviceDoc;
 use crate::state::AppState;
@@ -22,10 +21,10 @@ pub fn routes() -> Router<AppState> {
 
 async fn register(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ClientAddr(client): ClientAddr,
     ApiJson(input): ApiJson<RegisterDevice>,
 ) -> AppResult<(StatusCode, Json<DeviceRegistered>)> {
-    if !state.register_limiter.allow(&peer.ip().to_string()) {
+    if !state.limits.register.allow(&client) {
         return Err(AppError::new(StatusCode::TOO_MANY_REQUESTS, codes::RATE_LIMITED, "Too many new devices from this address."));
     }
     let name = input.name.trim();

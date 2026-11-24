@@ -1,7 +1,10 @@
 //! The sealed room log. Kept for the TTL so a device that was offline can still catch up
 //! through its inbox; the relay never decrypts any of it.
 
+use std::collections::HashMap;
 use std::time::Duration;
+
+use futures::TryStreamExt;
 
 use buccanet_protocol::events::MessageKind;
 use mongodb::bson::{DateTime, doc};
@@ -41,6 +44,12 @@ impl MessagesRepo {
 
     pub async fn by_client_id(&self, room_id: &str, sender: &str, client_message_id: &str) -> mongodb::error::Result<Option<MessageDoc>> {
         self.col.find_one(doc! { "room_id": room_id, "sender": sender, "client_message_id": client_message_id }).await
+    }
+
+    /// The sealed bytes of some messages of a room, by seq.
+    pub async fn payloads(&self, room_id: &str, seqs: &[i64]) -> mongodb::error::Result<HashMap<i64, Vec<u8>>> {
+        let messages: Vec<MessageDoc> = self.col.find(doc! { "room_id": room_id, "seq": { "$in": seqs } }).await?.try_collect().await?;
+        Ok(messages.into_iter().map(|message| (message.seq, message.payload)).collect())
     }
 
     pub async fn ensure_indexes(&self) -> mongodb::error::Result<()> {

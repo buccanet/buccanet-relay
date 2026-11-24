@@ -106,18 +106,18 @@ pub async fn revoke_invite(state: &AppState, room_id: &str, invite_id: &str, dev
     Ok(())
 }
 
-/// A live invite: not revoked, not expired.
-pub async fn live_invite(state: &AppState, token: &str) -> AppResult<InviteDoc> {
+/// A live invite and its room: not revoked, not expired, and made by someone still in the room.
+pub async fn live_invite(state: &AppState, token: &str) -> AppResult<(InviteDoc, RoomDoc)> {
     let invite = state.rooms.invite_by_token_hash(&hash_token(token)).await?.ok_or_else(|| AppError::not_found("This invite"))?;
-    if invite.revoked || invite.expires_at < DateTime::now() {
+    let room = state.rooms.by_id(&invite.room_id).await?.ok_or_else(|| AppError::not_found("This room"))?;
+    if invite.revoked || invite.expires_at < DateTime::now() || room.member(&invite.created_by).is_none() {
         return Err(AppError::new(axum::http::StatusCode::GONE, codes::INVITE_EXPIRED, "This invite link expired or was revoked."));
     }
-    Ok(invite)
+    Ok((invite, room))
 }
 
 pub async fn preview(state: &AppState, token: &str) -> AppResult<InvitePreview> {
-    let invite = live_invite(state, token).await?;
-    let room = state.rooms.by_id(&invite.room_id).await?.ok_or_else(|| AppError::not_found("This room"))?;
+    let (invite, room) = live_invite(state, token).await?;
     Ok(InvitePreview {
         room_id: room.id,
         member_count: room.members.len() as u32,

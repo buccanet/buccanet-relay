@@ -1,7 +1,8 @@
-//! One ordered inbox per device. Cursors are allocated and written under one lock, so a
-//! reader never sees cursor n + 1 before n.
+//! One ordered inbox per device. A device's cursors are allocated and written while that
+//! device is locked, so a reader never sees cursor n + 1 before n. A room message is stored
+//! once in the room log: inbox entries point at it by room and seq instead of copying it.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use buccanet_protocol::events::{InboxBody, InboxEvent};
@@ -10,11 +11,12 @@ use mongodb::bson::{DateTime, doc};
 use mongodb::options::IndexOptions;
 use mongodb::{Collection, Database, IndexModel};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
 use crate::error::AppResult;
 use crate::features::delivery::hub::Hub;
+use crate::features::delivery::messages::MessagesRepo;
 use crate::features::devices::repo::DevicesRepo;
+use crate::locks::KeyedLocks;
 
 pub const PAGE_SIZE: i64 = 200;
 
@@ -22,6 +24,7 @@ pub const PAGE_SIZE: i64 = 200;
 struct InboxDoc {
     device_id: String,
     cursor: i64,
+    /// The event, with the sealed bytes of a room message left out: they live in the room log.
     body_json: String,
     created_at: DateTime,
 }
@@ -30,26 +33,48 @@ struct InboxDoc {
 pub struct InboxRepo {
     col: Collection<InboxDoc>,
     ttl: Duration,
-    write_lock: Arc<Mutex<()>>,
+    devices: DevicesRepo,
+    messages: MessagesRepo,
+    hub: Hub,
+    device_locks: KeyedLocks,
+}
+
+/// The event as stored: room messages without their sealed bytes.
+fn stored_body(body: &InboxBody) -> InboxBody {
+    match body {
+        InboxBody::Message { room_id, seq, epoch, kind, sender_device_id, sender_kind, .. } => InboxBody::Message {
+            room_id: room_id.clone(),
+            seq: *seq,
+            epoch: *epoch,
+            kind: *kind,
+            sender_device_id: sender_device_id.clone(),
+            sender_kind: *sender_kind,
+            mls_message: Vec::new(),
+        },
+        other => other.clone(),
+    }
 }
 
 impl InboxRepo {
-    pub fn new(db: &Database, ttl: Duration) -> Self {
-        Self { col: db.collection("inbox"), ttl, write_lock: Arc::new(Mutex::new(())) }
+    pub fn new(db: &Database, ttl: Duration, devices: DevicesRepo, messages: MessagesRepo, hub: Hub) -> Self {
+        Self { col: db.collection("inbox"), ttl, devices, messages, hub, device_locks: KeyedLocks::default() }
     }
 
     /// Appends one event to each recipient's inbox and wakes their streams.
-    pub async fn deliver(&self, devices: &DevicesRepo, hub: &Hub, recipients: &[String], body: &InboxBody) -> AppResult<()> {
-        let body_json = serde_json::to_string(body).expect("inbox bodies always serialize");
-        let _guard = self.write_lock.lock().await;
+    pub async fn deliver(&self, recipients: &[String], body: &InboxBody) -> AppResult<()> {
+        let body_json = serde_json::to_string(&stored_body(body)).expect("inbox bodies always serialize");
+        let guards = self.device_locks.lock_all(recipients).await;
+        let mut entries = Vec::with_capacity(recipients.len());
         for device_id in recipients {
-            let Some(cursor) = devices.next_inbox_cursor(device_id).await? else { continue };
-            let entry = InboxDoc { device_id: device_id.clone(), cursor, body_json: body_json.clone(), created_at: DateTime::now() };
-            self.col.insert_one(entry).await?;
+            let Some(cursor) = self.devices.next_inbox_cursor(device_id).await? else { continue };
+            entries.push(InboxDoc { device_id: device_id.clone(), cursor, body_json: body_json.clone(), created_at: DateTime::now() });
         }
-        drop(_guard);
+        if !entries.is_empty() {
+            self.col.insert_many(entries).await?;
+        }
+        drop(guards);
         for device_id in recipients {
-            hub.wake(device_id);
+            self.hub.wake(device_id);
         }
         Ok(())
     }
@@ -63,13 +88,37 @@ impl InboxRepo {
             .await?
             .try_collect()
             .await?;
-        Ok(docs
+        let mut events: Vec<InboxEvent> = docs
             .into_iter()
             .filter_map(|entry| {
                 let body: InboxBody = serde_json::from_str(&entry.body_json).ok()?;
                 Some(InboxEvent { cursor: entry.cursor as u64, body })
             })
-            .collect())
+            .collect();
+        self.attach_payloads(&mut events).await?;
+        Ok(events)
+    }
+
+    /// Puts the sealed bytes back into room messages, read from the room log in one query per room.
+    async fn attach_payloads(&self, events: &mut [InboxEvent]) -> AppResult<()> {
+        let mut wanted: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+        for event in events.iter() {
+            if let InboxBody::Message { room_id, seq, .. } = &event.body {
+                wanted.entry(room_id.clone()).or_default().push(*seq as i64);
+            }
+        }
+        for (room_id, seqs) in wanted {
+            let payloads = self.messages.payloads(&room_id, &seqs).await?;
+            for event in events.iter_mut() {
+                if let InboxBody::Message { room_id: id, seq, mls_message, .. } = &mut event.body
+                    && *id == room_id
+                    && let Some(payload) = payloads.get(&(*seq as i64))
+                {
+                    mls_message.clone_from(payload);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn ensure_indexes(&self) -> mongodb::error::Result<()> {

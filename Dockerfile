@@ -8,8 +8,10 @@ COPY vendor/buccanet ./vendor/buccanet
 RUN cargo build --release --locked && cp target/release/buccanet-relay /usr/local/bin/buccanet-relay
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --uid 10001 relay
 COPY --from=build /usr/local/bin/buccanet-relay /usr/local/bin/buccanet-relay
 ENV BIND_HOST=0.0.0.0 PORT=8758 MESSAGE_TTL_DAYS=30
 EXPOSE 8758
+USER relay
 CMD ["buccanet-relay"]
