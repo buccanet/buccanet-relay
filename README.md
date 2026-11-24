@@ -26,6 +26,8 @@ docker run --rm -p 8758:8758 -e MONGODB_URI=mongodb://host.docker.internal:27017
 
 To serve the web app from the same origin, build the `buccanet-web` image, which adds the app to this one.
 
+`buccanet-relay health` exits 0 when the relay in the same container answers, for container health checks. Behind a reverse proxy, set `CLIENT_IP_HEADER` to the header the proxy fills with the client address (see `.env.example`), so limits per address count clients and not the proxy.
+
 ## License
 
 AGPL 3.0 (`LICENSE`), or a commercial license (`COMMERCIAL.md`). Copyright 2026 Ilan Ohayon.

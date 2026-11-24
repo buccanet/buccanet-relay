@@ -13,10 +13,19 @@ mod tokens;
 
 use std::net::SocketAddr;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::signal::unix::{SignalKind, signal};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("health") {
+        return health().await;
+    }
+    serve().await
+}
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?)).init();
     let config = config::Config::from_env()?;
     let state = state::AppState::connect(&config).await?;
@@ -38,7 +47,26 @@ async fn sweep(state: state::AppState) {
     }
 }
 
+/// `buccanet-relay health`: succeeds when the relay of this container answers `/healthz`, for
+/// container health checks in an image that ships no HTTP client.
+async fn health() -> Result<(), Box<dyn std::error::Error>> {
+    let port = std::env::var("PORT")?;
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>()?)).await?;
+    stream.write_all(b"GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").await?;
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await?;
+    if !answer.starts_with("HTTP/1.0 200") && !answer.starts_with("HTTP/1.1 200") {
+        return Err("the relay is not healthy".into());
+    }
+    Ok(())
+}
+
+/// Stops on Ctrl+C or on the SIGTERM a container runtime sends.
 async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
+    let mut terminate = signal(SignalKind::terminate()).expect("the SIGTERM handler installs");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
     tracing::info!("relay stopping");
 }
