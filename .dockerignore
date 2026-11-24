@@ -1,0 +1,6 @@
+target
+.tmp
+.git
+vendor/buccanet/target
+vendor/buccanet/.git
+vendor/buccanet/design/logo/renders

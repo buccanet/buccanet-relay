@@ -1,0 +1,11 @@
+# Scratch work, at every depth. `rm -rf .tmp` must always be safe.
+.tmp/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.idea/
+.impeccable/
+
+target/
