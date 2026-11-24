@@ -62,7 +62,7 @@ pub async fn create(state: &AppState, device: &DeviceDoc, input: CreateRoom) -> 
         epoch: 0,
         last_seq: 0,
         agent_run: 0,
-        members: vec![MemberDoc { device_id: device.id.clone(), admin: true, joined_at: DateTime::now() }],
+        members: vec![MemberDoc { device_id: device.id.clone(), admin: true, joined_at: DateTime::now(), sealed: 0 }],
         created_at: DateTime::now(),
     };
     state.rooms.insert(&room).await.map_err(|error| match error.kind.as_ref() {

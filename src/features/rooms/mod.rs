@@ -1,3 +1,5 @@
+pub mod admins;
+pub mod commits;
 pub mod joins;
 pub mod policy;
 pub mod posting;

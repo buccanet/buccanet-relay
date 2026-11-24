@@ -10,7 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::features::delivery::messages::MessageDoc;
 use crate::features::devices::repo::DeviceDoc;
 use crate::features::rooms::policy::{Burst, agent_burst, epoch_matches};
-use crate::features::rooms::repo::RoomAdvance;
+use crate::features::rooms::repo::{RoomAdvance, RoomDoc};
 use crate::features::rooms::service::member_room;
 use crate::state::AppState;
 
@@ -40,6 +40,20 @@ fn check_pace(state: &AppState, room_id: &str, device: &DeviceDoc, bytes: usize)
     Ok(())
 }
 
+/// A device numbers the messages it seals; a number it already used comes from a stale copy of
+/// its state, whose keys every member has already consumed, so nobody could read the message.
+fn check_device_seq(room: &RoomDoc, device_id: &str, device_seq: Option<u64>) -> AppResult<()> {
+    let (Some(sent), Some(member)) = (device_seq, room.member(device_id)) else { return Ok(()) };
+    if sent as i64 > member.sealed {
+        return Ok(());
+    }
+    Err(AppError::new(
+        StatusCode::CONFLICT,
+        codes::STALE_STATE,
+        "This copy of the device is out of date: another copy already sent from it. Use the device's current state.",
+    ))
+}
+
 pub async fn post(state: &AppState, room_id: &str, device: &DeviceDoc, input: PostMessage) -> AppResult<Accepted> {
     check_input(&input)?;
     member_room(state, room_id, device).await?;
@@ -59,6 +73,7 @@ pub async fn post(state: &AppState, room_id: &str, device: &DeviceDoc, input: Po
     if !epoch_matches(room.epoch as u64, framing.epoch) {
         return Err(AppError::stale_epoch(room.epoch as u64));
     }
+    check_device_seq(&room, &device.id, input.device_seq)?;
     let run = match agent_burst(device.kind, framing.kind, room.agent_run as u32, &room.policy) {
         Burst::Accept(run) => run,
         Burst::Exceeded => {
@@ -83,6 +98,9 @@ pub async fn post(state: &AppState, room_id: &str, device: &DeviceDoc, input: Po
     };
     state.messages.insert(&message).await?;
     state.rooms.advance(&room.id, RoomAdvance { epoch: room.epoch, last_seq: seq, agent_run: run as i64 }).await?;
+    if let Some(sealed) = input.device_seq {
+        state.rooms.set_member_sealed(&room.id, &device.id, sealed as i64).await?;
+    }
     let event = InboxBody::Message {
         room_id: room.id.clone(),
         seq: seq as u64,

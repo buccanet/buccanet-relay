@@ -17,6 +17,9 @@ pub struct MemberDoc {
     pub device_id: String,
     pub admin: bool,
     pub joined_at: DateTime,
+    /// The highest `deviceSeq` this member sent in the room.
+    #[serde(default)]
+    pub sealed: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,8 +122,20 @@ impl RoomsRepo {
         self.rooms.update_one(doc! { "_id": id }, doc! { "$push": { "members": member } }).await.map(|_| ())
     }
 
+    pub async fn set_member_sealed(&self, id: &str, device_id: &str, sealed: i64) -> mongodb::error::Result<()> {
+        let filter = doc! { "_id": id, "members.device_id": device_id };
+        self.rooms.update_one(filter, doc! { "$set": { "members.$.sealed": sealed } }).await.map(|_| ())
+    }
+
     pub async fn remove_member(&self, id: &str, device_id: &str) -> mongodb::error::Result<()> {
         self.rooms.update_one(doc! { "_id": id }, doc! { "$pull": { "members": { "device_id": device_id } } }).await.map(|_| ())
+    }
+
+    /// Marks exactly the members in `admins` as admins of the room.
+    pub async fn set_admins(&self, id: &str, admins: &[String]) -> mongodb::error::Result<()> {
+        let set = doc! { "members.$[admin].admin": true, "members.$[member].admin": false };
+        let filters = vec![doc! { "admin.device_id": { "$in": admins } }, doc! { "member.device_id": { "$nin": admins } }];
+        self.rooms.update_one(doc! { "_id": id }, doc! { "$set": set }).array_filters(filters).await.map(|_| ())
     }
 
     pub async fn insert_invite(&self, invite: &InviteDoc) -> mongodb::error::Result<()> {
