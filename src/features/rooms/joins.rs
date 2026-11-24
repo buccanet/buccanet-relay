@@ -11,7 +11,7 @@ use crate::features::delivery::messages::MessageDoc;
 use crate::features::devices::repo::DeviceDoc;
 use crate::features::rooms::policy::{epoch_matches, has_room_for_one_more};
 use crate::features::rooms::repo::{MemberDoc, RequestDoc, RequestStatus, RoomAdvance, RoomDoc};
-use crate::features::rooms::service::{admin_room, live_invite};
+use crate::features::rooms::service::{admin_room, live_invite, member_room};
 use crate::locks::KeyedGuard;
 use crate::state::AppState;
 
@@ -218,4 +218,15 @@ pub async fn remove(state: &AppState, room_id: &str, target: &str, device: &Devi
     let removed = InboxBody::MemberRemoved { room_id: room.id.clone(), device_id: target.to_string() };
     state.inbox.deliver(&room.member_ids_except(""), &removed).await?;
     Ok(accepted)
+}
+
+/// A member leaves: the room admins are told, and one of their devices commits the removal.
+/// The admin cannot leave a room it holds alone.
+pub async fn leave(state: &AppState, room_id: &str, device: &DeviceDoc) -> AppResult<()> {
+    let room = member_room(state, room_id, device).await?;
+    if room.member(&device.id).is_some_and(|member| member.admin) {
+        return Err(AppError::forbidden("The room admin cannot leave it."));
+    }
+    let event = InboxBody::MemberLeaving { room_id: room.id.clone(), device_id: device.id.clone() };
+    state.inbox.deliver(&room.admin_ids(), &event).await
 }

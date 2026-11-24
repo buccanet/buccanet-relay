@@ -25,6 +25,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rooms/{room_id}/requests/{request_id}/reject", post(reject))
         .route("/rooms/{room_id}/messages", post(post_message))
         .route("/rooms/{room_id}/members/{device_id}/remove", post(remove))
+        .route("/rooms/{room_id}/leave", post(leave))
         .route("/invites/{token}", get(preview))
         .route("/invites/{token}/requests", post(request_join))
 }
@@ -105,6 +106,11 @@ async fn remove(
     ApiJson(input): ApiJson<RemoveMember>,
 ) -> AppResult<Json<Accepted>> {
     Ok(Json(joins::remove(&state, &room_id, &target, &device, input).await?))
+}
+
+async fn leave(State(state): State<AppState>, AuthDevice(device): AuthDevice, Path(room_id): Path<String>) -> AppResult<StatusCode> {
+    joins::leave(&state, &room_id, &device).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn preview(
