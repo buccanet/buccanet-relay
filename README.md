@@ -69,6 +69,7 @@ The relay reads its settings from the environment. `.env.example` lists the valu
 | `MESSAGE_TTL_DAYS` | yes | none (30 in the image) | Days a sealed message and its inbox entries stay in MongoDB before deletion |
 | `STATIC_DIR` | no | unset | Folder of a built web app. When set, the relay serves it at `/` and answers unknown paths with its `index.html` |
 | `CLIENT_IP_HEADER` | no | unset | Header that carries the client address when a reverse proxy sits in front. When unset, the relay uses the address of the TCP connection |
+| `LISTING_ADMINS` | no | unset | Device ids, comma separated, that may list a room they administer under a public slug (`POST /api/v1/rooms/:roomId/listing`). When unset, no room is listed |
 | `RUST_LOG` | no | unset | Extra log filter directives for `tracing_subscriber`. The relay adds an `info` level directive to them |
 
 ## API overview

@@ -22,12 +22,14 @@ pub struct Limits {
     pub device: RateLimiter,
     /// New devices per client address.
     pub register: RateLimiter,
-    /// Invite previews per client address; they need no device.
+    /// Invite previews and listing reads per client address; they need no device.
     pub preview: RateLimiter,
     /// Join requests per device.
     pub join: RateLimiter,
     /// Messages per room.
     pub room: RateLimiter,
+    /// Messages per device in a listed room, keyed by room and device.
+    pub listed: RateLimiter,
     /// Bytes of sealed messages per device.
     pub upload: RateLimiter,
 }
@@ -40,12 +42,13 @@ impl Limits {
             preview: RateLimiter::new(120, MINUTE),
             join: RateLimiter::new(20, HOUR),
             room: RateLimiter::new(300, MINUTE),
+            listed: RateLimiter::new(12, MINUTE),
             upload: RateLimiter::new(50 * 1024 * 1024, HOUR),
         }
     }
 
     fn sweep(&self) {
-        for limiter in [&self.device, &self.register, &self.preview, &self.join, &self.room, &self.upload] {
+        for limiter in [&self.device, &self.register, &self.preview, &self.join, &self.room, &self.listed, &self.upload] {
             limiter.sweep();
         }
     }
@@ -58,6 +61,8 @@ pub struct AppState {
     pub public_origin: Arc<str>,
     /// Header the reverse proxy sets to the client's address, when one is in front.
     pub client_ip_header: Option<HeaderName>,
+    /// The devices that may list rooms publicly.
+    pub listing_admins: Arc<[String]>,
     pub devices: DevicesRepo,
     pub rooms: RoomsRepo,
     pub messages: MessagesRepo,
@@ -76,6 +81,7 @@ impl AppState {
         Ok(Self {
             public_origin: Arc::from(config.public_origin.trim_end_matches('/')),
             client_ip_header: config.client_ip_header.clone(),
+            listing_admins: Arc::from(config.listing_admins.as_slice()),
             inbox: InboxRepo::new(&db, ttl, devices.clone(), messages.clone(), hub.clone()),
             rooms: RoomsRepo::new(&db),
             devices,

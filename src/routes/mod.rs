@@ -1,6 +1,7 @@
 //! Transport only: routing, extraction, security headers and CORS.
 
 mod devices;
+mod listings;
 mod rooms;
 mod stream;
 
@@ -41,6 +42,7 @@ pub fn router(state: AppState, config: &Config) -> Router {
     let api = Router::new()
         .merge(devices::routes())
         .merge(rooms::routes())
+        .merge(listings::routes())
         .merge(stream::routes())
         .fallback(|| async { AppError::not_found("This route") })
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))

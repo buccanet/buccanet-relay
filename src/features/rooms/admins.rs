@@ -51,6 +51,7 @@ mod tests {
             agent_run: 0,
             members: vec![member("ada"), member("bob")],
             created_at: DateTime::now(),
+            listed: false,
         }
     }
 

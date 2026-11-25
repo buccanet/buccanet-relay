@@ -47,6 +47,7 @@ pub async fn view(state: &AppState, room: &RoomDoc) -> AppResult<RoomView> {
         epoch: room.epoch as u64,
         last_seq: room.last_seq as u64,
         members,
+        listed: room.listed,
     })
 }
 
@@ -64,6 +65,7 @@ pub async fn create(state: &AppState, device: &DeviceDoc, input: CreateRoom) -> 
         agent_run: 0,
         members: vec![MemberDoc { device_id: device.id.clone(), admin: true, joined_at: DateTime::now(), sealed: 0 }],
         created_at: DateTime::now(),
+        listed: false,
     };
     state.rooms.insert(&room).await.map_err(|error| match error.kind.as_ref() {
         mongodb::error::ErrorKind::Write(_) => AppError::invalid("A room already uses this groupId."),

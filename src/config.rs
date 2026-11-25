@@ -15,6 +15,8 @@ pub struct Config {
     pub static_dir: Option<PathBuf>,
     /// Header holding the client address, set by the reverse proxy in front of the relay.
     pub client_ip_header: Option<HeaderName>,
+    /// Device ids that may list rooms publicly (`LISTING_ADMINS`, comma separated); none when unset.
+    pub listing_admins: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +36,11 @@ fn parsed<T: std::str::FromStr>(name: &'static str) -> Result<T, ConfigError> {
     raw.parse().map_err(|_| ConfigError::Invalid(name, raw))
 }
 
+fn listing_admins() -> Vec<String> {
+    let raw = std::env::var("LISTING_ADMINS").unwrap_or_default();
+    raw.split(',').map(str::trim).filter(|id| !id.is_empty()).map(str::to_string).collect()
+}
+
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let port: u16 = parsed("PORT")?;
@@ -50,6 +57,7 @@ impl Config {
                 Ok(name) => Some(HeaderName::try_from(name.as_str()).map_err(|_| ConfigError::Invalid("CLIENT_IP_HEADER", name))?),
                 Err(_) => None,
             },
+            listing_admins: listing_admins(),
         })
     }
 }

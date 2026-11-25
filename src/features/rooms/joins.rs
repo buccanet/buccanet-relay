@@ -17,11 +17,17 @@ use crate::state::AppState;
 /// Join requests waiting in one room at most; more wait until an admin decides some.
 const MAX_PENDING_PER_ROOM: u64 = 100;
 
+/// A join request through an invite link.
 pub async fn request(state: &AppState, token: &str, device: &DeviceDoc, key_package: Vec<u8>) -> AppResult<JoinRequested> {
     if !state.limits.join.allow(&device.id) {
         return Err(AppError::rate_limited("Too many join requests from this device."));
     }
     let (_, room) = live_invite(state, token).await?;
+    request_into(state, &room, device, key_package).await
+}
+
+/// Records a join request into `room`, or refreshes the one waiting, and tells the room admins.
+pub async fn request_into(state: &AppState, room: &RoomDoc, device: &DeviceDoc, key_package: Vec<u8>) -> AppResult<JoinRequested> {
     if room.member(&device.id).is_some() {
         return Err(AppError::new(StatusCode::CONFLICT, codes::ALREADY_MEMBER, "This device is already in the room."));
     }
@@ -30,7 +36,9 @@ pub async fn request(state: &AppState, token: &str, device: &DeviceDoc, key_pack
         return Err(AppError::invalid("The key package must belong to the requesting device."));
     }
     let request_id = match state.rooms.pending_request(&room.id, &device.id).await? {
-        Some(existing) if existing.key_package == key_package => return Ok(JoinRequested { request_id: existing.id, room_id: room.id }),
+        Some(existing) if existing.key_package == key_package => {
+            return Ok(JoinRequested { request_id: existing.id, room_id: room.id.clone() });
+        }
         Some(existing) => {
             state.rooms.replace_request_key(&existing.id, &key_package).await?;
             existing.id
@@ -49,7 +57,7 @@ pub async fn request(state: &AppState, token: &str, device: &DeviceDoc, key_pack
         key_package,
     };
     state.inbox.deliver(&room.admin_ids(), &event).await?;
-    Ok(JoinRequested { request_id, room_id: room.id })
+    Ok(JoinRequested { request_id, room_id: room.id.clone() })
 }
 
 async fn insert_request(state: &AppState, room_id: &str, device_id: &str, key_package: &[u8]) -> AppResult<String> {

@@ -34,6 +34,9 @@ pub struct RoomDoc {
     pub agent_run: i64,
     pub members: Vec<MemberDoc>,
     pub created_at: DateTime,
+    /// A listing points at this room.
+    #[serde(default)]
+    pub listed: bool,
 }
 
 impl RoomDoc {
@@ -81,6 +84,19 @@ pub struct RequestDoc {
     pub created_at: DateTime,
 }
 
+/// A public listing: its slug is the document id, so one slug names one room.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListingDoc {
+    #[serde(rename = "_id")]
+    pub slug: String,
+    pub room_id: String,
+    pub title: String,
+    pub description: String,
+    /// The device that listed it first, the only one that may move it.
+    pub created_by: String,
+    pub updated_at: DateTime,
+}
+
 /// What changes on a room when a message is accepted.
 pub struct RoomAdvance {
     pub epoch: i64,
@@ -93,11 +109,17 @@ pub struct RoomsRepo {
     rooms: Collection<RoomDoc>,
     invites: Collection<InviteDoc>,
     requests: Collection<RequestDoc>,
+    listings: Collection<ListingDoc>,
 }
 
 impl RoomsRepo {
     pub fn new(db: &Database) -> Self {
-        Self { rooms: db.collection("rooms"), invites: db.collection("invites"), requests: db.collection("join_requests") }
+        Self {
+            rooms: db.collection("rooms"),
+            invites: db.collection("invites"),
+            requests: db.collection("join_requests"),
+            listings: db.collection("listings"),
+        }
     }
 
     pub async fn insert(&self, room: &RoomDoc) -> mongodb::error::Result<()> {
@@ -136,6 +158,23 @@ impl RoomsRepo {
         let set = doc! { "members.$[admin].admin": true, "members.$[member].admin": false };
         let filters = vec![doc! { "admin.device_id": { "$in": admins } }, doc! { "member.device_id": { "$nin": admins } }];
         self.rooms.update_one(doc! { "_id": id }, doc! { "$set": set }).array_filters(filters).await.map(|_| ())
+    }
+
+    pub async fn set_listed(&self, id: &str, listed: bool) -> mongodb::error::Result<()> {
+        self.rooms.update_one(doc! { "_id": id }, doc! { "$set": { "listed": listed } }).await.map(|_| ())
+    }
+
+    pub async fn listing(&self, slug: &str) -> mongodb::error::Result<Option<ListingDoc>> {
+        self.listings.find_one(doc! { "_id": slug }).await
+    }
+
+    pub async fn save_listing(&self, listing: &ListingDoc) -> mongodb::error::Result<()> {
+        self.listings.replace_one(doc! { "_id": &listing.slug }, listing).upsert(true).await.map(|_| ())
+    }
+
+    /// Whether another slug still points at the room.
+    pub async fn listed_elsewhere(&self, room_id: &str, slug: &str) -> mongodb::error::Result<bool> {
+        Ok(self.listings.count_documents(doc! { "room_id": room_id, "_id": { "$ne": slug } }).await? > 0)
     }
 
     pub async fn insert_invite(&self, invite: &InviteDoc) -> mongodb::error::Result<()> {
