@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a relay behavior that differs from the protocol or from this documentation.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep security vulnerabilities out of public issues. Report them privately through https://github.com/buccanet/buccanet-relay/security/advisories/new
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The request you sent, the answer you got and the answer you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps from a fresh relay and an empty database, when possible.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Relay commit
+      description: The output of `git rev-parse --short HEAD`, or the image tag you run.
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How the relay runs
+      options:
+        - cargo run
+        - Docker image of this repository
+        - buccanet-web image (relay and web app)
+        - https://app.buccanet.com
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relay logs
+      description: Remove tokens and invite links before pasting.
+      render: text
