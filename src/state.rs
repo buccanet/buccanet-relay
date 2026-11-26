@@ -61,8 +61,6 @@ pub struct AppState {
     pub public_origin: Arc<str>,
     /// Header the reverse proxy sets to the client's address, when one is in front.
     pub client_ip_header: Option<HeaderName>,
-    /// The devices that may list rooms publicly.
-    pub listing_admins: Arc<[String]>,
     pub devices: DevicesRepo,
     pub rooms: RoomsRepo,
     pub messages: MessagesRepo,
@@ -81,7 +79,6 @@ impl AppState {
         Ok(Self {
             public_origin: Arc::from(config.public_origin.trim_end_matches('/')),
             client_ip_header: config.client_ip_header.clone(),
-            listing_admins: Arc::from(config.listing_admins.as_slice()),
             inbox: InboxRepo::new(&db, ttl, devices.clone(), messages.clone(), hub.clone()),
             rooms: RoomsRepo::new(&db),
             devices,

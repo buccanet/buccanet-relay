@@ -1,6 +1,6 @@
-//! Public listings: a slug that names a room anyone may ask to join without an invite. Only the
-//! devices the operator names in `LISTING_ADMINS` list rooms, and every join still waits for a
-//! room admin.
+//! Public listings: a slug that names a room anyone may ask to join without an invite. An admin
+//! of a room lists it, a device holds a few slugs at most, and every join still waits for a room
+//! admin.
 
 use buccanet_protocol::api::{JoinRequested, ListingView, SetListing};
 use buccanet_protocol::listing::{check_text, valid_slug};
@@ -12,6 +12,9 @@ use crate::features::rooms::joins::request_into;
 use crate::features::rooms::repo::{ListingDoc, RoomDoc};
 use crate::features::rooms::service::admin_room;
 use crate::state::AppState;
+
+/// The slugs one device may hold, so no device fills the listings.
+const LISTINGS_PER_DEVICE: u64 = 3;
 
 fn checked(input: &SetListing) -> AppResult<()> {
     if !valid_slug(&input.slug) {
@@ -34,14 +37,14 @@ fn view(listing: &ListingDoc, room: &RoomDoc) -> ListingView {
 /// Lists a room under a slug, or moves the slug to it. A slug stays with the device that listed
 /// it first; the room it leaves stops being listed unless another slug names it.
 pub async fn set(state: &AppState, room_id: &str, device: &DeviceDoc, input: SetListing) -> AppResult<ListingView> {
-    if !state.listing_admins.contains(&device.id) {
-        return Err(AppError::forbidden("This relay lists rooms for the devices its operator allows."));
-    }
     checked(&input)?;
     let room = admin_room(state, room_id, device).await?;
     let previous = state.rooms.listing(&input.slug).await?;
     if previous.as_ref().is_some_and(|listing| listing.created_by != device.id) {
         return Err(AppError::forbidden("Another device holds this slug."));
+    }
+    if previous.is_none() && state.rooms.listings_by(&device.id).await? >= LISTINGS_PER_DEVICE {
+        return Err(AppError::forbidden("This device holds as many listings as a device may."));
     }
     let listing = ListingDoc {
         slug: input.slug,

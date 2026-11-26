@@ -69,7 +69,6 @@ The relay reads its settings from the environment. `.env.example` lists the valu
 | `MESSAGE_TTL_DAYS` | yes | none (30 in the image) | Days a sealed message and its inbox entries stay in MongoDB before deletion |
 | `STATIC_DIR` | no | unset | Folder of a built web app. When set, the relay serves it at `/` and answers unknown paths with its `index.html` |
 | `CLIENT_IP_HEADER` | no | unset | Header that carries the client address when a reverse proxy sits in front. When unset, the relay uses the address of the TCP connection |
-| `LISTING_ADMINS` | no | unset | Device ids, comma separated, that may list a room they administer under a public slug (`POST /api/v1/rooms/:roomId/listing`). When unset, no room is listed |
 | `RUST_LOG` | no | unset | Extra log filter directives for `tracing_subscriber`. The relay adds an `info` level directive to them |
 
 ## API overview
@@ -93,6 +92,9 @@ Every route lives under `/api/v1`. Bodies are JSON, binary fields are unpadded U
 | `POST /rooms/:roomId/members/:deviceId/remove` | Remove a member with its commit (admins) |
 | `POST /rooms/:roomId/admins` | Replace the admin list with its commit (admins) |
 | `POST /rooms/:roomId/leave` | Leave a room |
+| `POST /rooms/:roomId/listing` | List a room under a public slug, at most 3 slugs per device (admins) |
+| `GET /listings/:slug` | Read a listed room's title, description and member count, without a device |
+| `POST /listings/:slug/requests` | Ask to join a listed room with an MLS key package, without an invite |
 | `GET /inbox/:after` | Read up to 200 inbox events after a cursor |
 | `GET /stream` | Follow the inbox live over Server Sent Events, resuming from `Last-Event-ID` |
 

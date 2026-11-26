@@ -172,6 +172,11 @@ impl RoomsRepo {
         self.listings.replace_one(doc! { "_id": &listing.slug }, listing).upsert(true).await.map(|_| ())
     }
 
+    /// How many slugs the device holds.
+    pub async fn listings_by(&self, device_id: &str) -> mongodb::error::Result<u64> {
+        self.listings.count_documents(doc! { "created_by": device_id }).await
+    }
+
     /// Whether another slug still points at the room.
     pub async fn listed_elsewhere(&self, room_id: &str, slug: &str) -> mongodb::error::Result<bool> {
         Ok(self.listings.count_documents(doc! { "room_id": room_id, "_id": { "$ne": slug } }).await? > 0)
