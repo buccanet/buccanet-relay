@@ -117,7 +117,7 @@ The relay counts requests and bytes in memory and answers `429 rate_limited` pas
 | Join requests per device | 20 an hour |
 | Join requests through a listing per client address | 10 an hour |
 | Join requests waiting in a room, through invites | 100 |
-| Join requests waiting in a room, through a listing | 20 |
+| Join requests waiting in a room, through a listing | as many as the room has free seats |
 | Messages per room | 300 a minute |
 | Sealed bytes sent per device | 50 MB an hour |
 | Size of one sealed message | 100 KB |

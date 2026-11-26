@@ -9,19 +9,10 @@ use mongodb::bson::DateTime;
 use crate::error::{AppError, AppResult};
 use crate::features::devices::repo::DeviceDoc;
 use crate::features::rooms::commits::{check_commit, deliver_commit, locked_admin_room, store_commit};
-use crate::features::rooms::policy::has_room_for_one_more;
+use crate::features::rooms::policy::{has_room_for_one_more, pending_cap};
 use crate::features::rooms::repo::{MemberDoc, RequestDoc, RequestStatus, RequestVia, RoomDoc};
 use crate::features::rooms::service::{admin_room, live_invite, member_room};
 use crate::state::AppState;
-
-/// Join requests waiting in one room at most, by the way they came; more wait until an admin
-/// decides some. Listings, which anyone can reach, get the smaller share.
-fn pending_cap(via: RequestVia) -> u64 {
-    match via {
-        RequestVia::Invite => 100,
-        RequestVia::Listing => 20,
-    }
-}
 
 /// How long a device an admin rejected waits before it asks the same room again.
 const REJECTED_WAIT_MS: i64 = 3_600_000;
@@ -72,10 +63,10 @@ pub async fn request_into(state: &AppState, asked: Requested<'_>, key_package: V
             state.rooms.replace_request_key(&existing.id, &key_package).await?;
             existing.id
         }
-        None if state.rooms.count_pending(&room.id, asked.via).await? >= pending_cap(asked.via) => {
-            return Err(AppError::rate_limited("This room has too many requests waiting. Try again later."));
+        None => {
+            check_waiting_list(state, &asked).await?;
+            insert_request(state, &asked, &key_package).await?
         }
-        None => insert_request(state, &asked, &key_package).await?,
     };
     let event = InboxBody::JoinRequested {
         room_id: room.id.clone(),
@@ -87,6 +78,20 @@ pub async fn request_into(state: &AppState, asked: Requested<'_>, key_package: V
     };
     state.inbox.deliver(&room.admin_ids(), &event).await?;
     Ok(JoinRequested { request_id, room_id: room.id.clone() })
+}
+
+/// Refuses a new request once the room's waiting list is full. A listed room with no free seat
+/// answers room_full.
+async fn check_waiting_list(state: &AppState, asked: &Requested<'_>) -> AppResult<()> {
+    let (room, via) = (asked.room, asked.via);
+    let waiting = state.rooms.count_pending(&room.id, via).await?;
+    if waiting < pending_cap(via, room.members.len(), &room.policy) {
+        return Ok(());
+    }
+    if via == RequestVia::Listing && !has_room_for_one_more(room.members.len(), &room.policy) {
+        return Err(AppError::new(StatusCode::CONFLICT, codes::ROOM_FULL, "The room reached its member limit."));
+    }
+    Err(AppError::rate_limited("This room has too many requests waiting. Try again later."))
 }
 
 async fn insert_request(state: &AppState, asked: &Requested<'_>, key_package: &[u8]) -> AppResult<String> {

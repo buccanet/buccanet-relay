@@ -3,6 +3,8 @@
 use buccanet_protocol::api::{DeviceKind, RoomPolicy};
 use buccanet_protocol::events::MessageKind;
 
+use crate::features::rooms::repo::RequestVia;
+
 pub const MAX_MEMBERS_LIMIT: u32 = 1000;
 pub const AGENT_BURST_LIMIT: u32 = 10_000;
 
@@ -23,6 +25,16 @@ pub fn epoch_matches(room_epoch: u64, message_epoch: u64) -> bool {
 
 pub fn has_room_for_one_more(member_count: usize, policy: &RoomPolicy) -> bool {
     member_count < policy.max_members as usize
+}
+
+/// Join requests waiting in one room at most, by the way they came; more wait until an admin
+/// decides some. Through a listing, as many as the room has free seats, since no admin can let
+/// in more than that.
+pub fn pending_cap(via: RequestVia, member_count: usize, policy: &RoomPolicy) -> u64 {
+    match via {
+        RequestVia::Invite => 100,
+        RequestVia::Listing => (policy.max_members as u64).saturating_sub(member_count as u64),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,6 +79,14 @@ mod tests {
         assert!(!has_room_for_one_more(3, &p));
         assert!(epoch_matches(4, 4));
         assert!(!epoch_matches(5, 4));
+    }
+
+    #[test]
+    fn a_listing_holds_as_many_requests_as_free_seats() {
+        let p = RoomPolicy { max_members: 200, ..policy() };
+        assert_eq!(pending_cap(RequestVia::Listing, 1, &p), 199);
+        assert_eq!(pending_cap(RequestVia::Listing, 200, &p), 0);
+        assert_eq!(pending_cap(RequestVia::Invite, 200, &p), 100);
     }
 
     #[test]
