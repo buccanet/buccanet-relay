@@ -22,6 +22,11 @@ impl AppError {
         Self::new(StatusCode::UNAUTHORIZED, codes::UNAUTHORIZED, "A valid device token is required.")
     }
 
+    /// A well formed token that names no device: the client registers again.
+    pub fn device_unknown() -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, codes::DEVICE_UNKNOWN, "This relay knows no device with this token. Register the device again.")
+    }
+
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, codes::FORBIDDEN, message)
     }

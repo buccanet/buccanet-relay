@@ -73,7 +73,7 @@ The relay reads its settings from the environment. `.env.example` lists the valu
 
 ## API overview
 
-Every route lives under `/api/v1`. Bodies are JSON, binary fields are unpadded URL safe base64, and the bearer token travels in the `Authorization` header. The API uses no query strings. Errors have the shape `{ "error": code, "message": text }`.
+Every route lives under `/api/v1`. Bodies are JSON, binary fields are unpadded URL safe base64, and the bearer token travels in the `Authorization` header. The API uses no query strings. Errors have the shape `{ "error": code, "message": text }`. A missing or malformed bearer token answers `401 unauthorized`, and a well formed token that names no device answers `401 device_unknown`, so a client knows it has to register again.
 
 | Method and path | Purpose |
 | --- | --- |
@@ -93,10 +93,15 @@ Every route lives under `/api/v1`. Bodies are JSON, binary fields are unpadded U
 | `POST /rooms/:roomId/admins` | Replace the admin list with its commit (admins) |
 | `POST /rooms/:roomId/leave` | Leave a room |
 | `POST /rooms/:roomId/listing` | List a room under a public slug, at most 3 slugs per device (admins) |
+| `POST /rooms/:roomId/listing/remove` | Unlist a room: delete every slug that names it (admins) |
 | `GET /listings/:slug` | Read a listed room's title, description and member count, without a device |
 | `POST /listings/:slug/requests` | Ask to join a listed room with an MLS key package, without an invite |
 | `GET /inbox/:after` | Read up to 200 inbox events after a cursor |
 | `GET /stream` | Follow the inbox live over Server Sent Events, resuming from `Last-Event-ID` |
+
+A listing stands while its room exists and the device that listed it is still an admin of that room. A listing that no longer stands answers 404, accepts no join request and is deleted, on the first read and by a sweep every 5 minutes. Only the device that listed a slug moves it to another room, so moving it requires being an admin of the room it leaves. Any admin of a listed room unlists it with `POST /rooms/:roomId/listing/remove`, which deletes every slug that names the room and sets the room's `listed` to false. A new slug is stored with an insert under the device's lock, so parallel calls cannot pass the cap of 3 slugs or take a slug twice.
+
+A device whose join request an admin rejected asks the same room again only after one hour.
 
 The full contract, with bodies, inbox events and the MLS profile, is in [docs/PROTOCOL.md](https://github.com/buccanet/buccanet/blob/main/docs/PROTOCOL.md) of the core repository.
 
@@ -108,9 +113,11 @@ The relay counts requests and bytes in memory and answers `429 rate_limited` pas
 | --- | --- |
 | Requests per device | 600 a minute |
 | New devices per client address | 30 an hour |
-| Invite previews per client address | 120 a minute |
+| Invite previews and listing reads per client address | 120 a minute |
 | Join requests per device | 20 an hour |
-| Join requests waiting in a room | 100 |
+| Join requests through a listing per client address | 10 an hour |
+| Join requests waiting in a room, through invites | 100 |
+| Join requests waiting in a room, through a listing | 20 |
 | Messages per room | 300 a minute |
 | Sealed bytes sent per device | 50 MB an hour |
 | Size of one sealed message | 100 KB |

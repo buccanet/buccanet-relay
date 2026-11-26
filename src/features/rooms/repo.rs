@@ -1,6 +1,6 @@
 use buccanet_protocol::api::RoomPolicy;
 use futures::TryStreamExt;
-use mongodb::bson::{DateTime, doc, to_bson};
+use mongodb::bson::{Bson, DateTime, doc, to_bson};
 use std::time::Duration;
 
 use mongodb::options::IndexOptions;
@@ -72,6 +72,15 @@ pub enum RequestStatus {
     Rejected,
 }
 
+/// How a join request reached the room. Requests stored before the field came through invites.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RequestVia {
+    #[default]
+    Invite,
+    Listing,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestDoc {
     #[serde(rename = "_id")]
@@ -82,6 +91,11 @@ pub struct RequestDoc {
     pub key_package: Vec<u8>,
     pub status: RequestStatus,
     pub created_at: DateTime,
+    #[serde(default)]
+    pub via: RequestVia,
+    /// When an admin approved or rejected it.
+    #[serde(default)]
+    pub decided_at: Option<DateTime>,
 }
 
 /// A public listing: its slug is the document id, so one slug names one room.
@@ -168,13 +182,35 @@ impl RoomsRepo {
         self.listings.find_one(doc! { "_id": slug }).await
     }
 
-    pub async fn save_listing(&self, listing: &ListingDoc) -> mongodb::error::Result<()> {
-        self.listings.replace_one(doc! { "_id": &listing.slug }, listing).upsert(true).await.map(|_| ())
+    /// Stores a new slug; fails with a duplicate key error when the slug is taken.
+    pub async fn insert_listing(&self, listing: &ListingDoc) -> mongodb::error::Result<()> {
+        self.listings.insert_one(listing).await.map(|_| ())
     }
 
-    /// How many slugs the device holds.
-    pub async fn listings_by(&self, device_id: &str) -> mongodb::error::Result<u64> {
-        self.listings.count_documents(doc! { "created_by": device_id }).await
+    /// Points a slug its device holds at `listing`; false when the device no longer holds it.
+    pub async fn replace_listing(&self, listing: &ListingDoc) -> mongodb::error::Result<bool> {
+        let filter = doc! { "_id": &listing.slug, "created_by": &listing.created_by };
+        Ok(self.listings.replace_one(filter, listing).await?.matched_count == 1)
+    }
+
+    /// The slugs the device holds.
+    pub async fn listings_of(&self, device_id: &str) -> mongodb::error::Result<Vec<ListingDoc>> {
+        self.listings.find(doc! { "created_by": device_id }).await?.try_collect().await
+    }
+
+    pub async fn all_listings(&self) -> mongodb::error::Result<Vec<ListingDoc>> {
+        self.listings.find(doc! {}).await?.try_collect().await
+    }
+
+    /// Deletes a listing unless it changed since it was read.
+    pub async fn delete_listing(&self, listing: &ListingDoc) -> mongodb::error::Result<()> {
+        let filter = doc! { "_id": &listing.slug, "room_id": &listing.room_id, "created_by": &listing.created_by };
+        self.listings.delete_one(filter).await.map(|_| ())
+    }
+
+    /// Deletes every slug that names the room.
+    pub async fn unlist_room(&self, room_id: &str) -> mongodb::error::Result<()> {
+        self.listings.delete_many(doc! { "room_id": room_id }).await.map(|_| ())
     }
 
     /// Whether another slug still points at the room.
@@ -216,14 +252,27 @@ impl RoomsRepo {
         self.requests.find(doc! { "room_id": room_id, "status": "pending" }).sort(doc! { "created_at": 1 }).await?.try_collect().await
     }
 
-    pub async fn count_pending(&self, room_id: &str) -> mongodb::error::Result<u64> {
-        self.requests.count_documents(doc! { "room_id": room_id, "status": "pending" }).await
+    /// Requests waiting in the room that came the way `via` says.
+    pub async fn count_pending(&self, room_id: &str, via: RequestVia) -> mongodb::error::Result<u64> {
+        let listing = to_bson(&RequestVia::Listing).expect("via always serializes");
+        let via = match via {
+            RequestVia::Listing => listing,
+            RequestVia::Invite => Bson::Document(doc! { "$ne": listing }),
+        };
+        self.requests.count_documents(doc! { "room_id": room_id, "status": "pending", "via": via }).await
+    }
+
+    /// Whether an admin rejected the device from the room after `since`.
+    pub async fn rejected_since(&self, room_id: &str, device_id: &str, since: DateTime) -> mongodb::error::Result<bool> {
+        let filter = doc! { "room_id": room_id, "device_id": device_id, "status": "rejected", "decided_at": { "$gt": since } };
+        Ok(self.requests.count_documents(filter).await? > 0)
     }
 
     /// Decides a request that is still pending; false when it was decided already.
     pub async fn decide_request(&self, id: &str, status: RequestStatus) -> mongodb::error::Result<bool> {
         let status = to_bson(&status).expect("status always serializes");
-        let result = self.requests.update_one(doc! { "_id": id, "status": "pending" }, doc! { "$set": { "status": status } }).await?;
+        let decided = doc! { "$set": { "status": status, "decided_at": DateTime::now() } };
+        let result = self.requests.update_one(doc! { "_id": id, "status": "pending" }, decided).await?;
         Ok(result.modified_count == 1)
     }
 
@@ -240,6 +289,8 @@ impl RoomsRepo {
         self.requests.create_index(IndexModel::builder().keys(doc! { "created_at": 1 }).options(requests_ttl).build()).await?;
         let invites_ttl = IndexOptions::builder().expire_after(EXPIRED_INVITE_KEPT).build();
         self.invites.create_index(IndexModel::builder().keys(doc! { "expires_at": 1 }).options(invites_ttl).build()).await?;
+        self.listings.create_index(IndexModel::builder().keys(doc! { "created_by": 1 }).build()).await?;
+        self.listings.create_index(IndexModel::builder().keys(doc! { "room_id": 1 }).build()).await?;
         Ok(())
     }
 }

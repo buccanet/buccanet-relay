@@ -38,12 +38,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Every few minutes, forgets what idle limits and streams left in memory.
+/// Every few minutes, forgets what idle limits and streams left in memory and deletes the
+/// listings that no longer stand.
 async fn sweep(state: state::AppState) {
     let mut every = tokio::time::interval(std::time::Duration::from_secs(300));
     loop {
         every.tick().await;
         state.sweep();
+        if let Err(error) = features::rooms::listings::sweep(&state).await {
+            tracing::warn!(message = error.message, "the listing sweep failed");
+        }
     }
 }
 

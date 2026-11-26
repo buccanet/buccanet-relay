@@ -11,7 +11,23 @@ pub fn new_token() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// Whether `token` has the shape [`new_token`] gives: 32 bytes in unpadded URL safe base64.
+pub fn well_formed(token: &str) -> bool {
+    URL_SAFE_NO_PAD.decode(token).is_ok_and(|bytes| bytes.len() == 32)
+}
+
 pub fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_tokens_shaped_like_ours_are_well_formed() {
+        assert!(well_formed(&new_token()));
+        assert!(!well_formed("") && !well_formed("abc") && !well_formed(&format!("{}=", new_token())) && !well_formed(&"a".repeat(44)));
+    }
 }

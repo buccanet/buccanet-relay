@@ -10,12 +10,21 @@ use crate::error::{AppError, AppResult};
 use crate::features::devices::repo::DeviceDoc;
 use crate::features::rooms::commits::{check_commit, deliver_commit, locked_admin_room, store_commit};
 use crate::features::rooms::policy::has_room_for_one_more;
-use crate::features::rooms::repo::{MemberDoc, RequestDoc, RequestStatus, RoomDoc};
+use crate::features::rooms::repo::{MemberDoc, RequestDoc, RequestStatus, RequestVia, RoomDoc};
 use crate::features::rooms::service::{admin_room, live_invite, member_room};
 use crate::state::AppState;
 
-/// Join requests waiting in one room at most; more wait until an admin decides some.
-const MAX_PENDING_PER_ROOM: u64 = 100;
+/// Join requests waiting in one room at most, by the way they came; more wait until an admin
+/// decides some. Listings, which anyone can reach, get the smaller share.
+fn pending_cap(via: RequestVia) -> u64 {
+    match via {
+        RequestVia::Invite => 100,
+        RequestVia::Listing => 20,
+    }
+}
+
+/// How long a device an admin rejected waits before it asks the same room again.
+const REJECTED_WAIT_MS: i64 = 3_600_000;
 
 /// A join request through an invite link.
 pub async fn request(state: &AppState, token: &str, device: &DeviceDoc, key_package: Vec<u8>) -> AppResult<JoinRequested> {
@@ -23,18 +32,38 @@ pub async fn request(state: &AppState, token: &str, device: &DeviceDoc, key_pack
         return Err(AppError::rate_limited("Too many join requests from this device."));
     }
     let (_, room) = live_invite(state, token).await?;
-    request_into(state, &room, device, key_package).await
+    request_into(state, Requested { room: &room, device, via: RequestVia::Invite }, key_package).await
 }
 
-/// Records a join request into `room`, or refreshes the one waiting, and tells the room admins.
-pub async fn request_into(state: &AppState, room: &RoomDoc, device: &DeviceDoc, key_package: Vec<u8>) -> AppResult<JoinRequested> {
+/// Who asks to join which room, and how the request came.
+pub struct Requested<'a> {
+    pub room: &'a RoomDoc,
+    pub device: &'a DeviceDoc,
+    pub via: RequestVia,
+}
+
+/// Refuses a member, a key package that is not the requester's, and a device an admin of the
+/// room rejected less than an hour ago.
+async fn check_requester(state: &AppState, asked: &Requested<'_>, key_package: &[u8]) -> AppResult<()> {
+    let (room, device) = (asked.room, asked.device);
     if room.member(&device.id).is_some() {
         return Err(AppError::new(StatusCode::CONFLICT, codes::ALREADY_MEMBER, "This device is already in the room."));
     }
-    let owner = key_package_owner(&key_package).map_err(|error| AppError::invalid(error.to_string()))?;
+    let owner = key_package_owner(key_package).map_err(|error| AppError::invalid(error.to_string()))?;
     if owner.identity != device.id || owner.signature_key != device.public_key {
         return Err(AppError::invalid("The key package must belong to the requesting device."));
     }
+    let since = DateTime::from_millis(DateTime::now().timestamp_millis() - REJECTED_WAIT_MS);
+    if state.rooms.rejected_since(&room.id, &device.id, since).await? {
+        return Err(AppError::rate_limited("An admin of this room turned this device down less than an hour ago. Try again later."));
+    }
+    Ok(())
+}
+
+/// Records a join request into the room, or refreshes the one waiting, and tells the room admins.
+pub async fn request_into(state: &AppState, asked: Requested<'_>, key_package: Vec<u8>) -> AppResult<JoinRequested> {
+    check_requester(state, &asked, &key_package).await?;
+    let (room, device) = (asked.room, asked.device);
     let request_id = match state.rooms.pending_request(&room.id, &device.id).await? {
         Some(existing) if existing.key_package == key_package => {
             return Ok(JoinRequested { request_id: existing.id, room_id: room.id.clone() });
@@ -43,10 +72,10 @@ pub async fn request_into(state: &AppState, room: &RoomDoc, device: &DeviceDoc, 
             state.rooms.replace_request_key(&existing.id, &key_package).await?;
             existing.id
         }
-        None if state.rooms.count_pending(&room.id).await? >= MAX_PENDING_PER_ROOM => {
+        None if state.rooms.count_pending(&room.id, asked.via).await? >= pending_cap(asked.via) => {
             return Err(AppError::rate_limited("This room has too many requests waiting. Try again later."));
         }
-        None => insert_request(state, &room.id, &device.id, &key_package).await?,
+        None => insert_request(state, &asked, &key_package).await?,
     };
     let event = InboxBody::JoinRequested {
         room_id: room.id.clone(),
@@ -60,14 +89,16 @@ pub async fn request_into(state: &AppState, room: &RoomDoc, device: &DeviceDoc, 
     Ok(JoinRequested { request_id, room_id: room.id.clone() })
 }
 
-async fn insert_request(state: &AppState, room_id: &str, device_id: &str, key_package: &[u8]) -> AppResult<String> {
+async fn insert_request(state: &AppState, asked: &Requested<'_>, key_package: &[u8]) -> AppResult<String> {
     let request = RequestDoc {
         id: uuid::Uuid::new_v4().to_string(),
-        room_id: room_id.to_string(),
-        device_id: device_id.to_string(),
+        room_id: asked.room.id.clone(),
+        device_id: asked.device.id.clone(),
         key_package: key_package.to_vec(),
         status: RequestStatus::Pending,
         created_at: DateTime::now(),
+        via: asked.via,
+        decided_at: None,
     };
     state.rooms.insert_request(&request).await.map_err(|error| match error.kind.as_ref() {
         mongodb::error::ErrorKind::Write(_) => {

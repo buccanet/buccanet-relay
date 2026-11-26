@@ -14,6 +14,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/rooms/{room_id}/listing", post(set))
+        .route("/rooms/{room_id}/listing/remove", post(remove))
         .route("/listings/{slug}", get(show))
         .route("/listings/{slug}/requests", post(request_join))
 }
@@ -27,6 +28,11 @@ async fn set(
     Ok(Json(listings::set(&state, &room_id, &device, input).await?))
 }
 
+async fn remove(State(state): State<AppState>, AuthDevice(device): AuthDevice, Path(room_id): Path<String>) -> AppResult<StatusCode> {
+    listings::remove(&state, &room_id, &device).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn show(State(state): State<AppState>, ClientAddr(client): ClientAddr, Path(slug): Path<String>) -> AppResult<Json<ListingView>> {
     if !state.limits.preview.allow(&client) {
         return Err(AppError::rate_limited("Too many listing lookups from this address."));
@@ -36,9 +42,13 @@ async fn show(State(state): State<AppState>, ClientAddr(client): ClientAddr, Pat
 
 async fn request_join(
     State(state): State<AppState>,
+    ClientAddr(client): ClientAddr,
     AuthDevice(device): AuthDevice,
     Path(slug): Path<String>,
     ApiJson(input): ApiJson<RequestJoin>,
 ) -> AppResult<(StatusCode, Json<JoinRequested>)> {
+    if !state.limits.listing_join.allow(&client) {
+        return Err(AppError::rate_limited("Too many listing join requests from this address."));
+    }
     Ok((StatusCode::CREATED, Json(listings::request(&state, &slug, &device, input.key_package).await?)))
 }

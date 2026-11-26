@@ -26,6 +26,8 @@ pub struct Limits {
     pub preview: RateLimiter,
     /// Join requests per device.
     pub join: RateLimiter,
+    /// Join requests through a listing per client address, which a device costs nothing to add to.
+    pub listing_join: RateLimiter,
     /// Messages per room.
     pub room: RateLimiter,
     /// Messages per device in a listed room, keyed by room and device.
@@ -41,6 +43,7 @@ impl Limits {
             register: RateLimiter::new(30, HOUR),
             preview: RateLimiter::new(120, MINUTE),
             join: RateLimiter::new(20, HOUR),
+            listing_join: RateLimiter::new(10, HOUR),
             room: RateLimiter::new(300, MINUTE),
             listed: RateLimiter::new(12, MINUTE),
             upload: RateLimiter::new(50 * 1024 * 1024, HOUR),
@@ -48,7 +51,9 @@ impl Limits {
     }
 
     fn sweep(&self) {
-        for limiter in [&self.device, &self.register, &self.preview, &self.join, &self.room, &self.listed, &self.upload] {
+        let limiters =
+            [&self.device, &self.register, &self.preview, &self.join, &self.listing_join, &self.room, &self.listed, &self.upload];
+        for limiter in limiters {
             limiter.sweep();
         }
     }
@@ -67,6 +72,7 @@ pub struct AppState {
     pub inbox: InboxRepo,
     pub hub: Hub,
     room_locks: KeyedLocks,
+    device_locks: KeyedLocks,
     pub limits: Arc<Limits>,
 }
 
@@ -85,6 +91,7 @@ impl AppState {
             messages,
             hub,
             room_locks: KeyedLocks::default(),
+            device_locks: KeyedLocks::default(),
             limits: Arc::new(Limits::new()),
         })
     }
@@ -100,6 +107,11 @@ impl AppState {
     /// once the caller is known to belong to the room.
     pub async fn lock_room(&self, room_id: &str) -> KeyedGuard {
         self.room_locks.lock(room_id).await
+    }
+
+    /// Serializes the changes one device makes to what it holds across rooms, such as its listings.
+    pub async fn lock_device(&self, device_id: &str) -> KeyedGuard {
+        self.device_locks.lock(device_id).await
     }
 
     /// Drops what the limits and the hub keep for keys no longer in use.
